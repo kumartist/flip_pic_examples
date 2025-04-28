@@ -1,5 +1,6 @@
 make
 ./RunFluidSimulator
+./FluidSimulator inputs/fluid.json
 
 This displays the simulation, but also generates .png image files with which to
 make a movie or animated GIF below:
