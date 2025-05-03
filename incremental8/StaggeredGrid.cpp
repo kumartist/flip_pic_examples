@@ -1,6 +1,7 @@
 #include "StaggeredGrid.h"
 
 #include <cassert>
+#include <iostream>
 
 #include "NeighborDirection.h"
 
@@ -132,9 +133,29 @@ void Contribute(double weight, double particle_velocity,
   (*grid_vel_weights)(i, j, k) += weight;
 }
 
+void ContributeToD(double weight, Particle* particle, Eigen::Vector3d weights) {
+  particle->D += weight * (-1 * weights) * (-1 * weights).transpose();
+}
+
+void ContributeAPIC(double weight, double particle_velocity,
+                Array3D<double>* grid_vels, Array3D<double>* grid_vel_weights,
+                std::size_t i, std::size_t j, std::size_t k, Eigen::Matrix3d B, Eigen::Matrix3d D, Eigen::Vector3d weights, Eigen::Vector3d particle_vel_vector) {
+  // Use pseudo-inverse instead of regular inverse to handle singular matrices
+  Eigen::Matrix3d D_pinv = D.completeOrthogonalDecomposition().pseudoInverse();
+  double new_value = (particle_vel_vector + B * D_pinv * (-1 * weights))[1];
+  
+  // If we still get NaN, fall back to the original particle velocity
+  if (std::isnan(new_value)) {
+    new_value = particle_velocity;
+  }
+  
+  (*grid_vels)(i, j, k) += weight * new_value;
+  (*grid_vel_weights)(i, j, k) += weight;
+}
+
 void Splat(const Eigen::Vector3d& shifted_particle_position_lc, double dx,
            double particle_velocity, Array3D<double>* grid_vels,
-           Array3D<double>* grid_vel_weights) {
+           Array3D<double>* grid_vel_weights, Eigen::Matrix3d B, Eigen::Matrix3d D, bool isAPIC, Eigen::Vector3d particle_vel_vector) {
   Eigen::Vector3d p_shift_lc_over_dx = shifted_particle_position_lc / dx;
 
   // Determine the grid cell containing the shifted particle position.
@@ -154,22 +175,68 @@ void Splat(const Eigen::Vector3d& shifted_particle_position_lc, double dx,
   std::size_t j = ijk[1];
   std::size_t k = ijk[2];
 
-  Contribute(om_w0 * om_w1 * om_w2, particle_velocity, grid_vels,
-             grid_vel_weights, i, j, k);
-  Contribute(om_w0 * om_w1 * w2, particle_velocity, grid_vels, grid_vel_weights,
-             i, j, k + 1);
-  Contribute(om_w0 * w1 * om_w2, particle_velocity, grid_vels, grid_vel_weights,
-             i, j + 1, k);
-  Contribute(om_w0 * w1 * w2, particle_velocity, grid_vels, grid_vel_weights, i,
-             j + 1, k + 1);
-  Contribute(w0 * om_w1 * om_w2, particle_velocity, grid_vels, grid_vel_weights,
-             i + 1, j, k);
-  Contribute(w0 * om_w1 * w2, particle_velocity, grid_vels, grid_vel_weights,
-             i + 1, j, k + 1);
-  Contribute(w0 * w1 * om_w2, particle_velocity, grid_vels, grid_vel_weights,
-             i + 1, j + 1, k);
-  Contribute(w0 * w1 * w2, particle_velocity, grid_vels, grid_vel_weights,
-             i + 1, j + 1, k + 1);
+  if (isAPIC) {
+    ContributeAPIC(om_w0 * om_w1 * om_w2, particle_velocity, grid_vels,
+             grid_vel_weights, i, j, k, B, D, weights,particle_vel_vector);
+    ContributeAPIC(om_w0 * om_w1 * w2, particle_velocity, grid_vels,
+             grid_vel_weights, i, j, k + 1, B, D, weights,particle_vel_vector);
+    ContributeAPIC(om_w0 * w1 * om_w2, particle_velocity, grid_vels,
+             grid_vel_weights, i, j + 1, k, B, D, weights, particle_vel_vector);
+    ContributeAPIC(om_w0 * w1 * w2, particle_velocity, grid_vels,
+             grid_vel_weights, i, j + 1, k + 1, B, D, weights, particle_vel_vector);
+    ContributeAPIC(w0 * om_w1 * om_w2, particle_velocity, grid_vels,
+             grid_vel_weights, i + 1, j, k, B, D, weights, particle_vel_vector);
+    ContributeAPIC(w0 * om_w1 * w2, particle_velocity, grid_vels,
+             grid_vel_weights, i + 1, j, k + 1, B, D, weights, particle_vel_vector);
+    ContributeAPIC(w0 * w1 * om_w2, particle_velocity, grid_vels,
+             grid_vel_weights, i + 1, j + 1, k, B, D, weights, particle_vel_vector);
+    ContributeAPIC(w0 * w1 * w2, particle_velocity, grid_vels,
+             grid_vel_weights, i + 1, j + 1, k + 1, B, D, weights, particle_vel_vector);
+  } else {
+
+    Contribute(om_w0 * om_w1 * om_w2, particle_velocity, grid_vels,
+              grid_vel_weights, i, j, k);
+    Contribute(om_w0 * om_w1 * w2, particle_velocity, grid_vels, grid_vel_weights,
+              i, j, k + 1);
+    Contribute(om_w0 * w1 * om_w2, particle_velocity, grid_vels, grid_vel_weights,
+              i, j + 1, k);
+    Contribute(om_w0 * w1 * w2, particle_velocity, grid_vels, grid_vel_weights, i,
+              j + 1, k + 1);
+    Contribute(w0 * om_w1 * om_w2, particle_velocity, grid_vels, grid_vel_weights,
+              i + 1, j, k);
+    Contribute(w0 * om_w1 * w2, particle_velocity, grid_vels, grid_vel_weights,
+              i + 1, j, k + 1);
+    Contribute(w0 * w1 * om_w2, particle_velocity, grid_vels, grid_vel_weights,
+              i + 1, j + 1, k);
+    Contribute(w0 * w1 * w2, particle_velocity, grid_vels, grid_vel_weights,
+              i + 1, j + 1, k + 1);
+}
+}
+
+void SplatToGetD(const Eigen::Vector3d& shifted_particle_position_lc, double dx, Particle* particle) {
+  Eigen::Vector3d p_shift_lc_over_dx = shifted_particle_position_lc / dx;
+
+  // Determine the grid cell containing the shifted particle position.
+  GridIndices ijk = floor(p_shift_lc_over_dx);
+
+  // Determine the barycentric weights of the shifted particle position inside
+  // that grid cell.
+  Eigen::Vector3d weights = GetWeights(p_shift_lc_over_dx, ijk);
+
+  double w0 = weights[0];
+  double om_w0 = 1.0 - w0;
+  double w1 = weights[1];
+  double om_w1 = 1.0 - w1;
+  double w2 = weights[2];
+  double om_w2 = 1.0 - w2;
+
+  ContributeToD(om_w0 * om_w1 * om_w2, particle, weights);
+  ContributeToD(om_w0 * om_w1 * w2, particle, weights);
+  ContributeToD(om_w0 * w1 * om_w2, particle, weights);
+  ContributeToD(om_w0 * w1 * w2, particle, weights);
+  ContributeToD(w0 * om_w1 * om_w2, particle, weights);
+  ContributeToD(w0 * om_w1 * w2, particle, weights);
+  
 }
 
 MaterialType GetNeighborMaterial(const Array3D<MaterialType>& cell_labels,
@@ -257,7 +324,17 @@ StaggeredGrid::StaggeredGrid(std::size_t nx, std::size_t ny, std::size_t nz,
       fw_(nx, ny, nz + 1),
       cell_labels_(nx, ny, nz),
       neighbors_(nx, ny, nz),
-      pressure_solver_(nx, ny, nz) {}
+      pressure_solver_(nx, ny, nz) {
+  Eigen::Matrix3d B;
+  B << 0.0, 0.0, 0.0,
+       0.0, 0.0, 0.0,
+       0.0, 0.0, 0.0;  // Initialize to identity matrix
+
+  Eigen::Matrix3d D;
+  D << 0.0, 0.0, 0.0,
+       0.0, 0.0, 0.0,
+       0.0, 0.0, 0.0;  // Initialize to zero matrix
+}
 
 StaggeredGrid::~StaggeredGrid() {}
 
@@ -303,18 +380,28 @@ inline Eigen::Vector3d StaggeredGrid::ClampToNonSolidCells(
   return clamped_pos;
 }
 
-void StaggeredGrid::ParticlesToGrid(const std::vector<Particle>& particles) {
+void StaggeredGrid::ParticlesToGrid(std::vector<Particle>& particles) {
+  ZeroOutAffineState(particles);
   ZeroOutVelocities();
   ClearCellLabels();
+
+  for (std::vector<Particle>::iterator p = particles.begin();
+       p != particles.end(); p++) {
+    Eigen::Vector3d p_lc(p->pos - lc_);
+    Eigen::Vector3d p_shift_lc_over_dx = p_lc / dx_;
+    SplatToGetD(p_lc - half_shift_yz_, dx_, &(*p));
+    SplatToGetD(p_lc - half_shift_xz_, dx_, &(*p));
+    SplatToGetD(p_lc - half_shift_xy_, dx_, &(*p));
+  }
 
   for (std::vector<Particle>::const_iterator p = particles.begin();
        p != particles.end(); p++) {
     Eigen::Vector3d p_lc(p->pos - lc_);
     SetParticlesCellToFluid(p_lc);
 
-    Splat(p_lc - half_shift_yz_, dx_, p->vel[0], &u_, &fu_);
-    Splat(p_lc - half_shift_xz_, dx_, p->vel[1], &v_, &fv_);
-    Splat(p_lc - half_shift_xy_, dx_, p->vel[2], &w_, &fw_);
+    Splat(p_lc - half_shift_yz_, dx_, p->vel[0], &u_, &fu_, p->B, p->D, true, p->vel);
+    Splat(p_lc - half_shift_xz_, dx_, p->vel[1], &v_, &fv_, p->B, p->D, true, p->vel);
+    Splat(p_lc - half_shift_xy_, dx_, p->vel[2], &w_, &fw_, p->B, p->D, true, p->vel);
   }
 
   NormalizeHorizontalVelocities();
@@ -333,6 +420,14 @@ void StaggeredGrid::ZeroOutVelocities() {
   fv_ = 0.0;
   w_ = 0.0;
   fw_ = 0.0;
+}
+
+void StaggeredGrid::ZeroOutAffineState(std::vector<Particle>& particles) {
+  for (std::vector<Particle>::iterator p = particles.begin();
+       p != particles.end(); p++) {
+    p->B = Eigen::Matrix3d::Zero();
+    p->D = Eigen::Matrix3d::Zero();
+  }
 }
 
 void StaggeredGrid::ClearCellLabels() {
@@ -590,6 +685,14 @@ void StaggeredGrid::SubtractPressureGradientFromVelocity() {
     }
   }
 }
+
+// void StaggeredGrid::GridToParticleAPIC(double apic_ratio, 
+//                                                 const Particle& particle) const {
+//   Eigen::Vector3d apic_velocity = InterpolateOldGridVelocities(particle.pos);
+//   Eigen::Vector3d new_velocity = InterpolateCurrentGridVelocities(particle.pos);
+
+//   //particle->B 
+// }
 
 Eigen::Vector3d StaggeredGrid::GridToParticle(double flip_ratio,
                                               const Particle& particle) const {

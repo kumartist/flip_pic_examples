@@ -7,6 +7,9 @@
 struct Particle {
   Eigen::Vector3d pos;
   Eigen::Vector3d vel;
+  //Add new affine velocity matrix. 
+  Eigen::Matrix3d B;
+  Eigen::Matrix3d D;
 };
 
 // Returns an array of Particles read from the file with relative path

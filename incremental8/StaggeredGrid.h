@@ -39,7 +39,7 @@ class StaggeredGrid {
   Eigen::Vector3d Advect(const Eigen::Vector3d& pos, double dt) const;
 
   // Transfers particle velocities to this grid.
-  void ParticlesToGrid(const std::vector<Particle>& particles);
+  void ParticlesToGrid(std::vector<Particle>& particles);
 
   // Subtracts |dt| times acceleration due to gravity to all vertical velocities
   // in this grid.
@@ -80,6 +80,7 @@ class StaggeredGrid {
   inline Eigen::Vector3d ClampToNonSolidCells(const Eigen::Vector3d& pos) const;
 
   void ZeroOutVelocities();
+  void ZeroOutAffineState(std::vector<Particle>& particles);
 
   void ClearCellLabels();
   void SetOuterCellLabelsToSolid();
