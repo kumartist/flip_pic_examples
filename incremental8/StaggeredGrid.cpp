@@ -134,7 +134,19 @@ void Contribute(double weight, double particle_velocity,
 }
 
 void ContributeToD(double weight, Particle* particle, Eigen::Vector3d weights) {
-  particle->D += weight * (-1 * weights) * (-1 * weights).transpose();
+  // Add regularization to prevent singularity
+  const double epsilon = 1e-6;
+  particle->D += weight * (-1 * weights) * (-1 * weights).transpose() + 
+                epsilon * weight * Eigen::Matrix3d::Identity();
+}
+
+void ContributeToB(double weight, Particle* particle, Eigen::Vector3d weights, Eigen::Vector3d grid_velocity) {
+  // Ensure weights are positive and normalized
+  weights = weights.cwiseMax(0.0);
+  if (weights.sum() > 0) {
+    weights /= weights.sum();
+    particle->B += weight * grid_velocity * weights.transpose();
+  }
 }
 
 void ContributeAPIC(double weight, double particle_velocity,
@@ -353,9 +365,14 @@ Eigen::Vector3d StaggeredGrid::InterpolateTheseGridVelocities(
     const Eigen::Vector3d& pos, const Array3D<double>& u,
     const Array3D<double>& v, const Array3D<double>& w) const {
   Eigen::Vector3d p_lc(pos - lc_);
+  
+  // Ensure position is within grid bounds
+  p_lc = p_lc.cwiseMax(lc_).cwiseMin(uc_ - Eigen::Vector3d(dx_, dx_, dx_));
+  
   double u_p = InterpolateGridVelocities(p_lc - half_shift_yz_, u, dx_);
   double v_p = InterpolateGridVelocities(p_lc - half_shift_xz_, v, dx_);
   double w_p = InterpolateGridVelocities(p_lc - half_shift_xy_, w, dx_);
+  
   return Eigen::Vector3d(u_p, v_p, w_p);
 }
 
@@ -425,7 +442,8 @@ void StaggeredGrid::ZeroOutVelocities() {
 void StaggeredGrid::ZeroOutAffineState(std::vector<Particle>& particles) {
   for (std::vector<Particle>::iterator p = particles.begin();
        p != particles.end(); p++) {
-    p->B = Eigen::Matrix3d::Zero();
+    // Don't zero out B matrix to preserve affine motion
+    // p->B = Eigen::Matrix3d::Zero();
     p->D = Eigen::Matrix3d::Zero();
   }
 }
@@ -686,13 +704,35 @@ void StaggeredGrid::SubtractPressureGradientFromVelocity() {
   }
 }
 
-// void StaggeredGrid::GridToParticleAPIC(double apic_ratio, 
-//                                                 const Particle& particle) const {
-//   Eigen::Vector3d apic_velocity = InterpolateOldGridVelocities(particle.pos);
-//   Eigen::Vector3d new_velocity = InterpolateCurrentGridVelocities(particle.pos);
-
-//   //particle->B 
-// }
+void StaggeredGrid::GridToParticleAPIC(double apic_ratio, 
+                                      Particle& particle) const {
+  Eigen::Vector3d old_velocity = InterpolateOldGridVelocities(particle.pos);
+  Eigen::Vector3d new_velocity = InterpolateCurrentGridVelocities(particle.pos);
+  
+  // Calculate the change in velocity
+  Eigen::Vector3d delta_velocity = new_velocity - old_velocity;
+  
+  // Get the particle's position relative to the grid's lower corner
+  Eigen::Vector3d p_lc = particle.pos - lc_;
+  
+  // Calculate weights for trilinear interpolation
+  Eigen::Vector3d p_shift_lc_over_dx = p_lc / dx_;
+  GridIndices ijk = floor(p_shift_lc_over_dx);
+  Eigen::Vector3d weights = GetWeights(p_shift_lc_over_dx, ijk);
+  
+  // Ensure weights are positive and normalized
+  weights = weights.cwiseMax(0.0);
+  if (weights.sum() > 0) {
+    weights /= weights.sum();
+    
+    // Update B matrix with velocity change
+    particle.B += apic_ratio * delta_velocity * weights.transpose();
+    
+    // Add small damping to prevent unbounded growth
+    const double damping = 0.99;
+    particle.B *= damping;
+  }
+}
 
 Eigen::Vector3d StaggeredGrid::GridToParticle(double flip_ratio,
                                               const Particle& particle) const {

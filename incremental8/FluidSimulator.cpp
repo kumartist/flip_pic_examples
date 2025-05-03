@@ -70,7 +70,8 @@ int main(int argc, char** argv) {
 
     for (std::vector<Particle>::iterator p = particles.begin();
          p != particles.end(); p++) {
-      p->vel = grid.GridToParticle(params.flip_ratio(), *p);
+      //p->vel = grid.GridToParticle(params.flip_ratio(), *p);
+      grid.GridToParticleAPIC(params.flip_ratio(), *p);
     }
   }
 

@@ -55,6 +55,9 @@ class StaggeredGrid {
   Eigen::Vector3d GridToParticle(double flip_ratio,
                                  const Particle& particle) const;
 
+  void GridToParticleAPIC(double apic_ratio,
+                          Particle& particle) const;
+
  private:
   // Don't allow copy constructor to be called.
   StaggeredGrid(const StaggeredGrid& other);
